@@ -13,6 +13,39 @@ namespace MuMech
         //Smart RCS translation
         public bool smartTranslation;
 
+        // "Smart translation & rotation": balances rotation, translation and mixed commands every physics frame.
+        // Exclusive with smartTranslation (the window keeps only one on; if both are set, this one wins).
+        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL)), ToggleInfoItem("#MechJeb_smartRotation", InfoItem.Category.Thrust)]
+        public bool smartRotation;
+
+        // Smart rotation: weights of the force leak, the torque leak and the lost thrust.  The torque weight is low
+        // while rotating (the attitude controller corrects torque errors, nothing corrects a force leak) and high for
+        // pure translation (the torque is then the whole leak).
+        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
+        public readonly EditableDouble rotationForceWeight = 1;
+
+        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
+        public readonly EditableDouble rotationTorqueWeight = 0.05;
+
+        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
+        public readonly EditableDouble translationTorqueWeight = 1;
+
+        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
+        public readonly EditableDouble rotationThrustWeight = 0.001;
+
+        // Smart rotation: whether the window's measurements section is open (the tuning section uses advancedOptions).
+        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
+        public bool showMeasurements;
+
+        // Smart rotation: compute and measure, but leave the thrusters at stock (for comparison).
+        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
+        public bool rotationMeasureOnly;
+
+        public readonly RCSRotationBalancer RotationBalancer = new RCSRotationBalancer();
+
+        // Whether the old translation solver drives the thrusters (VesselState asks it for the available thrust).
+        public bool UsesTranslationSolver => Enabled && smartTranslation && !smartRotation;
+
         // Overdrive
         [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL)), EditableInfoItem("#MechJeb_RCSBalancerOverdrive", InfoItem.Category.Thrust, rightLabel = "%")]
         //RCS balancer overdrive
@@ -155,7 +188,8 @@ namespace MuMech
         public MechJebModuleRCSBalancer(MechJebCore core)
             : base(core)
         {
-            Priority = 700;
+            // After the attitude controller (800), so that smart rotation sees its pitch/yaw/roll.
+            Priority = 900;
         }
 
         protected override void OnModuleEnabled()
@@ -169,6 +203,7 @@ namespace MuMech
         protected override void OnModuleDisabled()
         {
             solverThread.Stop();
+            RotationBalancer.RestoreAll();
 
             base.OnModuleDisabled();
         }
@@ -272,7 +307,15 @@ namespace MuMech
 
         public override void Drive(FlightCtrlState s)
         {
-            if (smartTranslation)
+            if (smartRotation)
+            {
+                RotationBalancer.Solver.ForceWeight = rotationForceWeight;
+                RotationBalancer.RotationTorqueWeight = rotationTorqueWeight;
+                RotationBalancer.TranslationTorqueWeight = translationTorqueWeight;
+                RotationBalancer.Solver.ThrustWeight = rotationThrustWeight;
+                RotationBalancer.Drive(Vessel, s, rotationMeasureOnly);
+            }
+            else if (smartTranslation)
             {
                 AdjustRCSThrottles(s);
             }

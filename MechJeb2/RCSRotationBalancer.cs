@@ -5,6 +5,7 @@ using MechJebLib.Primitives;
 using MechJebLib.RCS;
 using MechJebLibBindings;
 using UnityEngine;
+using static System.Math;
 
 namespace MuMech
 {
@@ -13,14 +14,13 @@ namespace MuMech
     //
     // Stock ModuleRCS (KSP 1.12.5) computes maxFuelFlow from thrusterPower once in OnLoad and uses only maxFuelFlow
     // and thrustPercentage in FixedUpdate, so writing thrusterPower in flight does not change the thrust.  This class
-    // scales maxFuelFlow instead: it is not persisted, it scales thrust and propellant flow together and the
-    // nozzle throttle does not depend on it, so force and torque stay linear in the multipliers.
+    // scales maxFuelFlow instead (ModuleRCSExtensions): it is not persisted, it scales thrust and propellant flow
+    // together and the nozzle throttle does not depend on it, so force and torque stay linear in the multipliers.
     public class RCSRotationBalancer
     {
         private class ModuleState
         {
             public ModuleRCS Module;
-            public double OriginalMaxFuelFlow;
             public double X = 1;
             public bool Seen;
         }
@@ -34,6 +34,7 @@ namespace MuMech
         private readonly List<V3> _torques = new List<V3>();
         private readonly List<double> _thrusts = new List<double>();
         private double[] _ones = new double[0];
+        private double[] _applied = new double[0]; // multipliers written to the modules (floored, or 1 when measuring only)
         private bool _translating;
 
         // Never write a zero maxFuelFlow: ModuleRCS.RequestPropellant(0) divides 0 by 0, the NaN marks the module as
@@ -46,7 +47,7 @@ namespace MuMech
         public double RotationTorqueWeight = 0.05;
         public double TranslationTorqueWeight = 1;
 
-        // Report of the last balanced command.
+        // Report of the last balanced command ("balanced" = with the multipliers actually written).
         public int ModuleCount { get; private set; }
         public double StockLeak { get; private set; } // kN, force off the commanded translation line at x = 1
         public double BalancedLeak { get; private set; } // the same after balancing
@@ -54,8 +55,8 @@ namespace MuMech
         public double BalancedTorqueLeak { get; private set; } // the same after balancing
         public double StockAccelLeak { get; private set; } // m/s², force off the commanded line / mass at x = 1
         public double AccelLeak { get; private set; } // the same after balancing
-        public double TorqueKept { get; private set; } // balanced / stock torque along the commanded rotation
-        public double ForceKept { get; private set; } // balanced / stock force along the commanded translation
+        public double TorqueKept { get; private set; } // balanced / stock torque along the commanded rotation, NaN if none
+        public double ForceKept { get; private set; } // balanced / stock force along the commanded translation, NaN if none
         public double SolveTimeMs { get; private set; }
         public double MaxSolveTimeMs { get; private set; }
         public int Iterations { get; private set; }
@@ -103,7 +104,7 @@ namespace MuMech
 
                     if (!_states.TryGetValue(rcs, out ModuleState state))
                     {
-                        state = new ModuleState { Module = rcs, OriginalMaxFuelFlow = rcs.maxFuelFlow };
+                        state = new ModuleState { Module = rcs };
                         _states.Add(rcs, state);
                     }
 
@@ -113,7 +114,7 @@ namespace MuMech
                     {
                         // Give it stock thrust back, so that it can recover (e.g. from a flameout) on its own.
                         state.X = 1;
-                        rcs.maxFuelFlow = state.OriginalMaxFuelFlow;
+                        rcs.RestoreMaxFuelFlow();
                         continue;
                     }
 
@@ -121,7 +122,7 @@ namespace MuMech
                     commandRot += inputRot;
                     commandLin += inputLin;
 
-                    ModuleForceAndTorque(rcs, state.OriginalMaxFuelFlow, inputRot, inputLin, com, precision, out V3 force, out V3 torque,
+                    ModuleForceAndTorque(rcs, inputRot, inputLin, com, precision, out V3 force, out V3 torque,
                         out double thrust);
                     if (force == V3.zero)
                         continue;
@@ -163,16 +164,23 @@ namespace MuMech
             _stopwatch.Stop();
 
             SolveTimeMs = _stopwatch.Elapsed.TotalMilliseconds;
-            MaxSolveTimeMs = System.Math.Max(MaxSolveTimeMs, SolveTimeMs);
+            MaxSolveTimeMs = Max(MaxSolveTimeMs, SolveTimeMs);
             Iterations = _solver.Iterations;
             if (!ok) Failures++;
             else if (!_solver.Converged) NotConverged++;
+
+            if (_applied.Length != n)
+                _applied = new double[n];
 
             for (int i = 0; i < n; i++)
             {
                 ModuleState state = _active[i];
                 state.X = measureOnly ? 1 : _solver.X[i];
-                state.Module.maxFuelFlow = state.OriginalMaxFuelFlow * System.Math.Max(state.X, MIN_MULTIPLIER);
+                _applied[i] = Max(state.X, MIN_MULTIPLIER);
+                if (_applied[i] < 1)
+                    state.Module.ScaleMaxFuelFlow(_applied[i]);
+                else
+                    state.Module.RestoreMaxFuelFlow();
             }
 
             UpdateReport(vessel, commandLin, commandRot);
@@ -182,10 +190,10 @@ namespace MuMech
 
             double totalThrust = 0;
             for (int i = 0; i < n; i++)
-                totalThrust += System.Math.Max(_active[i].X, MIN_MULTIPLIER) * _thrusts[i];
+                totalThrust += _applied[i] * _thrusts[i];
 
             double dt = TimeWarp.fixedDeltaTime;
-            _predictedLeakImpulse += (measureOnly ? StockLeak : BalancedLeak) * dt;
+            _predictedLeakImpulse += BalancedLeak * dt;
             _predictedThrustImpulse += totalThrust * dt;
         }
 
@@ -203,7 +211,7 @@ namespace MuMech
                     if (!(part.Modules[m] is ModuleRCS rcs) || rcs.isJustForShow || rcs.thrustForces == null || rcs.thrusterTransforms == null)
                         continue;
 
-                    int count = System.Math.Min(rcs.thrustForces.Length, rcs.thrusterTransforms.Count);
+                    int count = Min(rcs.thrustForces.Length, rcs.thrusterTransforms.Count);
                     for (int i = 0; i < count; i++)
                     {
                         if (!(rcs.thrustForces[i] > 0) || float.IsInfinity(rcs.thrustForces[i]))
@@ -272,21 +280,21 @@ namespace MuMech
             V3 wn = w.normalized;
 
             V3 stockForce = _solver.Force(_ones);
-            V3 balancedForce = _solver.Force(_solver.X);
+            V3 balancedForce = _solver.Force(_applied);
             V3 stockTorque = _solver.Torque(_ones);
-            V3 balancedTorque = _solver.Torque(_solver.X);
+            V3 balancedTorque = _solver.Torque(_applied);
 
-            StockLeak = RCSBalanceSolver.Reject(stockForce, tn).magnitude;
-            BalancedLeak = RCSBalanceSolver.Reject(balancedForce, tn).magnitude;
-            StockTorqueLeak = RCSBalanceSolver.Reject(stockTorque, wn).magnitude;
-            BalancedTorqueLeak = RCSBalanceSolver.Reject(balancedTorque, wn).magnitude;
+            StockLeak = V3.ProjectOnPlane(stockForce, tn).magnitude;
+            BalancedLeak = V3.ProjectOnPlane(balancedForce, tn).magnitude;
+            StockTorqueLeak = V3.ProjectOnPlane(stockTorque, wn).magnitude;
+            BalancedTorqueLeak = V3.ProjectOnPlane(balancedTorque, wn).magnitude;
 
             double mass = vessel.totalMass;
             StockAccelLeak = mass > 0 ? StockLeak / mass : 0;
             AccelLeak = mass > 0 ? BalancedLeak / mass : 0;
 
             double stockAlong = V3.Dot(stockTorque, wn);
-            TorqueKept = stockAlong != 0 ? V3.Dot(balancedTorque, wn) / stockAlong : 0;
+            TorqueKept = stockAlong != 0 ? V3.Dot(balancedTorque, wn) / stockAlong : double.NaN; // NaN: no rotation
 
             double stockForceAlong = V3.Dot(stockForce, tn);
             ForceKept = stockForceAlong != 0 ? V3.Dot(balancedForce, tn) / stockForceAlong : double.NaN; // NaN: no translation
@@ -310,7 +318,7 @@ namespace MuMech
             foreach (ModuleState state in _states.Values)
             {
                 if (state.Module != null)
-                    state.Module.maxFuelFlow = state.OriginalMaxFuelFlow;
+                    state.Module.RestoreMaxFuelFlow();
             }
 
             _states.Clear();
@@ -332,7 +340,7 @@ namespace MuMech
             {
                 ModuleState state = _states[_removed[i]];
                 if (state.Module != null)
-                    state.Module.maxFuelFlow = state.OriginalMaxFuelFlow;
+                    state.Module.RestoreMaxFuelFlow();
                 _states.Remove(_removed[i]);
             }
         }
@@ -376,7 +384,7 @@ namespace MuMech
 
         // Force and torque (about the CoM) of one module at multiplier 1, following ModuleRCS.FixedUpdate and
         // ModuleRCS.CalculateThrust.
-        private static void ModuleForceAndTorque(ModuleRCS rcs, double originalMaxFuelFlow, V3 inputRot, V3 inputLin, Vector3d com,
+        private static void ModuleForceAndTorque(ModuleRCS rcs, V3 inputRot, V3 inputLin, Vector3d com,
             bool precision, out V3 force, out V3 torque, out double thrust)
         {
             force = V3.zero;
@@ -387,7 +395,7 @@ namespace MuMech
                 return;
 
             double curve = rcs.useThrustCurve ? rcs.thrustCurveDisplay : 1.0;
-            double power = rcs.flowMult * curve * originalMaxFuelFlow * rcs.thrustPercentage * 0.01 * rcs.realISP * rcs.G * rcs.ispMult;
+            double power = rcs.flowMult * curve * rcs.UnscaledMaxFuelFlow() * rcs.thrustPercentage * 0.01 * rcs.realISP * rcs.G * rcs.ispMult;
             if (power <= 0)
                 return;
 

@@ -116,8 +116,8 @@ namespace MechJebLib.RCS
 
             for (int i = 0; i < n; i++)
             {
-                _a[i] = sqrtForceWeight * Reject(_force[i], t);
-                _b[i] = sqrtTorqueWeight * Reject(_torque[i], w);
+                _a[i] = sqrtForceWeight * V3.ProjectOnPlane(_force[i], t);
+                _b[i] = sqrtTorqueWeight * V3.ProjectOnPlane(_torque[i], w);
             }
 
             for (int i = 0; i < n; i++)
@@ -302,8 +302,5 @@ namespace MechJebLib.RCS
         }
 
         private static bool IsFinite(double d) => !double.IsNaN(d) && !double.IsInfinity(d);
-
-        /// <summary>Component of v perpendicular to the unit vector n (all of v for n = 0).</summary>
-        public static V3 Reject(V3 v, V3 n) => v - V3.Dot(v, n) * n;
     }
 }

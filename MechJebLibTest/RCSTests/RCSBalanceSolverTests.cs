@@ -198,7 +198,7 @@ namespace MechJebLibTest.RCSTests
 
             Assert.True(stockTorque.magnitude > 1);
             Assert.True(torque.magnitude < 0.05 * stockTorque.magnitude);
-            Assert.True(RCSBalanceSolver.Reject(force, lin).magnitude < 1e-6);
+            Assert.True(V3.ProjectOnPlane(force, lin).magnitude < 1e-6);
             Assert.True(Abs(V3.Dot(force, lin)) > 1);
         }
 
@@ -217,14 +217,16 @@ namespace MechJebLibTest.RCSTests
             V3 torque = solver.Torque(solver.X);
             V3 stockForce = solver.Force(Ones(solver.Count));
 
-            Assert.True(RCSBalanceSolver.Reject(force, lin.normalized).magnitude < 0.01 * stockForce.magnitude);
+            Assert.True(V3.ProjectOnPlane(force, lin).magnitude < 0.01 * stockForce.magnitude);
             Assert.True(Abs(V3.Dot(force, lin.normalized)) > 0.1);
             Assert.True(V3.Dot(torque, rot) != 0);
         }
 
         [Fact]
-        public void OneEndedProbeDoesNotThrowAndReportsLeak()
+        public void OneEndedProbeKeepsOnlyTheCouple()
         {
+            // One ring at the front: on pitch, the blocks on the pitch axis fire their lateral nozzles at full throttle
+            // (all leak), the other two fire their axial nozzles as a pure couple.  Balancing keeps only the couple.
             var modules = new List<List<Nozzle>>();
             for (int i = 0; i < 4; i++)
                 modules.Add(Block(5, 1.0, i * PI / 2));
@@ -232,13 +234,19 @@ namespace MechJebLibTest.RCSTests
             var rot = new V3(1, 0, 0);
             RCSBalanceSolver solver = Setup(modules, V3.zero, rot, V3.zero);
 
+            V3 stockForce = solver.Force(Ones(solver.Count));
+            V3 stockTorque = solver.Torque(Ones(solver.Count));
             Assert.True(solver.Solve(V3.zero, rot));
 
             for (int i = 0; i < solver.Count; i++)
                 Assert.InRange(solver.X[i], 0, 1);
 
-            // Rotation from one end can only come from net force: the leak stays.
-            Assert.True(solver.Force(solver.X).magnitude >= 0);
+            double kept = V3.Dot(solver.Torque(solver.X), rot) / V3.Dot(stockTorque, rot);
+            _testOutputHelper.WriteLine($"stock |F| = {stockForce.magnitude}, balanced |F| = {solver.Force(solver.X).magnitude}, torque kept = {kept}");
+
+            Assert.True(stockForce.magnitude > 1);
+            Assert.True(solver.Force(solver.X).magnitude < 0.01 * stockForce.magnitude);
+            Assert.InRange(kept, 0.01, 0.1); // the couple is weak: short lever, axial nozzles at 1/√26 throttle
         }
 
         [Fact]

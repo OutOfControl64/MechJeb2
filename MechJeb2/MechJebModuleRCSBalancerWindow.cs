@@ -1,4 +1,4 @@
-﻿extern alias JetBrainsAnnotations;
+extern alias JetBrainsAnnotations;
 using System;
 using KSP.Localization;
 using UnityEngine;
@@ -39,13 +39,13 @@ namespace MuMech
             GUILayout.BeginHorizontal();
             bool translation =
                 GUILayout.Toggle(balancer.smartTranslation, Localizer.Format("#MechJeb_RCSBalancer_checkbox1"),
-                    GuiUtils.LayoutWidth(240)); //"Smart translation"
+                    GuiUtils.LayoutExpandWidth); //"Smart translation"
             GUILayout.EndHorizontal();
 
             GUILayout.BeginHorizontal();
             bool rotation =
                 GUILayout.Toggle(balancer.smartRotation, Localizer.Format("#MechJeb_RCSBalancer_checkbox3"),
-                    GuiUtils.LayoutWidth(220)); //"Smart translation & rotation"
+                    GuiUtils.LayoutExpandWidth); //"Smart translation & rotation"
             GUILayout.EndHorizontal();
 
             // Only one mode at a time: the one just switched on wins (the info item toggles can set both).
@@ -144,7 +144,8 @@ namespace MuMech
                     (rb.StockAccelLeak * 1000).ToString("F2") + " → " + (rb.AccelLeak * 1000).ToString("F2") + " mm/s²"); //"Accel. leak"
                 SimpleTextInfo(Localizer.Format("#MechJeb_RCSBalancer_label11"),
                     rb.StockTorqueLeak.ToString("F2") + " → " + rb.BalancedTorqueLeak.ToString("F2") + " kN·m"); //"Torque leak"
-                SimpleTextInfo(Localizer.Format("#MechJeb_RCSBalancer_label12"), (rb.TorqueKept * 100).ToString("F0") + " %"); //"Torque kept"
+                SimpleTextInfo(Localizer.Format("#MechJeb_RCSBalancer_label12"),
+                    double.IsNaN(rb.TorqueKept) ? "–" : (rb.TorqueKept * 100).ToString("F0") + " %"); //"Torque kept"
                 SimpleTextInfo(Localizer.Format("#MechJeb_RCSBalancer_label13"),
                     double.IsNaN(rb.ForceKept) ? "–" : (rb.ForceKept * 100).ToString("F0") + " %"); //"Force kept"
                 SimpleTextInfo(Localizer.Format("#MechJeb_RCSBalancer_label14"),
@@ -186,7 +187,6 @@ namespace MuMech
                     leftLabelTooltip: Localizer.Format("#MechJeb_RCSBalancer_tooltip4")); //"Thrust weight"
             }
         }
-
 
         // A collapsible section, drawn like Principia's and Talaria's; returns whether it is open.
         private static bool Section(ref bool open, string title)

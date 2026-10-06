@@ -224,7 +224,7 @@ namespace MechJebLibBindings.FuelFlowSimulation
 
                 rcs.IsEnabled = kspModuleRCS.isEnabled;
                 rcs.Isp = kspModuleRCS.atmosphereCurve.Evaluate(0) * kspModuleRCS.ispMult;
-                rcs.Thrust = kspModuleRCS.flowMult * kspModuleRCS.maxFuelFlow * rcs.Isp * rcs.G;
+                rcs.Thrust = kspModuleRCS.flowMult * kspModuleRCS.UnscaledMaxFuelFlow() * rcs.Isp * rcs.G;
                 rcs.RcsEnabled = kspModuleRCS.rcsEnabled;
             }
 

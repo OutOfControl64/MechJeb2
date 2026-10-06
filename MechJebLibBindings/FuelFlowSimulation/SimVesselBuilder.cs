@@ -296,7 +296,7 @@ namespace MechJebLibBindings.FuelFlowSimulation
                 rcs.G = kspModuleRCS.G;
                 rcs.ISPMult = kspModuleRCS.ispMult;
                 rcs.ThrustPercentage = kspModuleRCS.thrustPercentage;
-                rcs.MaxFuelFlow = kspModuleRCS.maxFuelFlow;
+                rcs.MaxFuelFlow = kspModuleRCS.UnscaledMaxFuelFlow();
 
                 rcs.AtmosphereCurve.LoadFromFloatCurve(kspModuleRCS.atmosphereCurve);
 

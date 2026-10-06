@@ -13,7 +13,7 @@ namespace MuMech
         {
             balancer = Core.GetComputerModule<MechJebModuleRCSBalancer>();
 
-            if (balancer.smartTranslation || balancer.smartRotation)
+            if (balancer.smartTranslation || balancer.smartTranslationRotation)
             {
                 balancer.Users.Add(this);
             }
@@ -34,7 +34,7 @@ namespace MuMech
             GUILayout.BeginVertical();
 
             bool wasTranslation = balancer.smartTranslation;
-            bool wasRotation = balancer.smartRotation;
+            bool wasRotation = balancer.smartTranslationRotation;
 
             GUILayout.BeginHorizontal();
             bool translation =
@@ -44,7 +44,7 @@ namespace MuMech
 
             GUILayout.BeginHorizontal();
             bool rotation =
-                GUILayout.Toggle(balancer.smartRotation, Localizer.Format("#MechJeb_RCSBalancer_checkbox3"),
+                GUILayout.Toggle(balancer.smartTranslationRotation, Localizer.Format("#MechJeb_RCSBalancer_checkbox3"),
                     GuiUtils.LayoutExpandWidth); //"Smart translation & rotation"
             GUILayout.EndHorizontal();
 
@@ -58,21 +58,21 @@ namespace MuMech
             }
 
             balancer.smartTranslation = translation;
-            balancer.smartRotation = rotation;
+            balancer.smartTranslationRotation = rotation;
 
             if (wasTranslation != translation || wasRotation != rotation)
             {
                 balancer.ResetThrusterForces();
-                balancer.RotationBalancer.RestoreAll();
-                balancer.RotationBalancer.ResetStats();
+                balancer.CommandBalancer.RestoreAll();
+                balancer.CommandBalancer.ResetStats();
             }
 
-            if (balancer.smartRotation)
+            if (balancer.smartTranslationRotation)
             {
-                RotationReport();
+                CommandBalancerReport();
             }
 
-            if (balancer.smartTranslation && !balancer.smartRotation)
+            if (balancer.smartTranslation && !balancer.smartTranslationRotation)
             {
                 // Overdrive
                 double oldOverdrive = balancer.overdrive;
@@ -116,7 +116,7 @@ namespace MuMech
                 }
             }
 
-            if (balancer.smartTranslation || balancer.smartRotation)
+            if (balancer.smartTranslation || balancer.smartTranslationRotation)
             {
                 balancer.Users.Add(this);
             }
@@ -130,9 +130,9 @@ namespace MuMech
             base.WindowGUI(windowID);
         }
 
-        private void RotationReport()
+        private void CommandBalancerReport()
         {
-            RCSRotationBalancer rb = balancer.RotationBalancer;
+            RCSCommandBalancer rb = balancer.CommandBalancer;
 
             GUILayout.Label(Localizer.Format("#MechJeb_RCSBalancer_label7")); //"Balances rotation, translation and both at once."
             if (Section(ref balancer.showMeasurements, Localizer.Format("#MechJeb_RCSBalancer_section1"))) //"Measurements"
@@ -148,6 +148,13 @@ namespace MuMech
                     double.IsNaN(rb.TorqueKept) ? "–" : (rb.TorqueKept * 100).ToString("F0") + " %"); //"Torque kept"
                 SimpleTextInfo(Localizer.Format("#MechJeb_RCSBalancer_label13"),
                     double.IsNaN(rb.ForceKept) ? "–" : (rb.ForceKept * 100).ToString("F0") + " %"); //"Force kept"
+
+                GUILayout.BeginHorizontal();
+                GUILayout.Label(new GUIContent(Localizer.Format("#MechJeb_RCSBalancer_label24"), Localizer.Format("#MechJeb_RCSBalancer_tooltip7")),
+                    GuiUtils.LayoutExpandWidth); //"Controller torque P/R/Y"
+                GUILayout.Label((rb.AxisTorqueKept(0) * 100).ToString("F0") + " / " + (rb.AxisTorqueKept(1) * 100).ToString("F0") + " / " +
+                    (rb.AxisTorqueKept(2) * 100).ToString("F0") + " %", GuiUtils.LayoutNoExpandWidth);
+                GUILayout.EndHorizontal();
                 SimpleTextInfo(Localizer.Format("#MechJeb_RCSBalancer_label14"),
                     rb.SolveTimeMs.ToString("F3") + " / " + rb.MaxSolveTimeMs.ToString("F3") + " ms"); //"Solver time / max"
                 SimpleTextInfo(Localizer.Format("#MechJeb_RCSBalancer_label15"), rb.Iterations.ToString()); //"Solver iterations"
@@ -166,8 +173,8 @@ namespace MuMech
                     GuiUtils.LayoutNoExpandWidth);
                 GUILayout.EndHorizontal();
 
-                balancer.rotationMeasureOnly =
-                    GUILayout.Toggle(balancer.rotationMeasureOnly,
+                balancer.balanceMeasureOnly =
+                    GUILayout.Toggle(balancer.balanceMeasureOnly,
                         new GUIContent(Localizer.Format("#MechJeb_RCSBalancer_checkbox4"),
                             Localizer.Format("#MechJeb_RCSBalancer_tooltip5"))); //"Measure only (stock thrust)"
 
@@ -177,13 +184,13 @@ namespace MuMech
 
             if (Section(ref balancer.advancedOptions, Localizer.Format("#MechJeb_RCSBalancer_section2"))) //"Tuning"
             {
-                GuiUtils.SimpleTextBox(Localizer.Format("#MechJeb_RCSBalancer_label17"), balancer.rotationForceWeight,
+                GuiUtils.SimpleTextBox(Localizer.Format("#MechJeb_RCSBalancer_label17"), balancer.balanceForceWeight,
                     leftLabelTooltip: Localizer.Format("#MechJeb_RCSBalancer_tooltip1")); //"Force weight"
-                GuiUtils.SimpleTextBox(Localizer.Format("#MechJeb_RCSBalancer_label18"), balancer.rotationTorqueWeight,
+                GuiUtils.SimpleTextBox(Localizer.Format("#MechJeb_RCSBalancer_label18"), balancer.balanceTorqueWeight,
                     leftLabelTooltip: Localizer.Format("#MechJeb_RCSBalancer_tooltip2")); //"Torque weight (rotating)"
-                GuiUtils.SimpleTextBox(Localizer.Format("#MechJeb_RCSBalancer_label22"), balancer.translationTorqueWeight,
+                GuiUtils.SimpleTextBox(Localizer.Format("#MechJeb_RCSBalancer_label22"), balancer.balanceTranslationTorqueWeight,
                     leftLabelTooltip: Localizer.Format("#MechJeb_RCSBalancer_tooltip3")); //"Torque weight (transl. only)"
-                GuiUtils.SimpleTextBox(Localizer.Format("#MechJeb_RCSBalancer_label19"), balancer.rotationThrustWeight,
+                GuiUtils.SimpleTextBox(Localizer.Format("#MechJeb_RCSBalancer_label19"), balancer.balanceThrustWeight,
                     leftLabelTooltip: Localizer.Format("#MechJeb_RCSBalancer_tooltip4")); //"Thrust weight"
             }
         }

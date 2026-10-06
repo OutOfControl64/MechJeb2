@@ -15,36 +15,36 @@ namespace MuMech
 
         // "Smart translation & rotation": balances rotation, translation and mixed commands every physics frame.
         // Exclusive with smartTranslation (the window keeps only one on; if both are set, this one wins).
-        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL)), ToggleInfoItem("#MechJeb_smartRotation", InfoItem.Category.Thrust)]
-        public bool smartRotation;
+        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL)), ToggleInfoItem("#MechJeb_smartTranslationRotation", InfoItem.Category.Thrust)]
+        public bool smartTranslationRotation;
 
-        // Smart rotation: weights of the force leak, the torque leak and the lost thrust.  The torque weight is low
+        // Smart translation & rotation: weights of the force leak, the torque leak and the lost thrust.  The torque weight is low
         // while rotating (the attitude controller corrects torque errors, nothing corrects a force leak) and high for
         // pure translation (the torque is then the whole leak).
         [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
-        public readonly EditableDouble rotationForceWeight = 1;
+        public readonly EditableDouble balanceForceWeight = 1;
 
         [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
-        public readonly EditableDouble rotationTorqueWeight = 0.05;
+        public readonly EditableDouble balanceTorqueWeight = 0.05;
 
         [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
-        public readonly EditableDouble translationTorqueWeight = 1;
+        public readonly EditableDouble balanceTranslationTorqueWeight = 1;
 
         [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
-        public readonly EditableDouble rotationThrustWeight = 0.001;
+        public readonly EditableDouble balanceThrustWeight = 0.001;
 
-        // Smart rotation: whether the window's measurements section is open (the tuning section uses advancedOptions).
+        // Smart translation & rotation: whether the window's measurements section is open (the tuning section uses advancedOptions).
         [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
         public bool showMeasurements;
 
-        // Smart rotation: compute and measure, but leave the thrusters at stock (for comparison).
+        // Smart translation & rotation: compute and measure, but leave the thrusters at stock (for comparison).
         [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
-        public bool rotationMeasureOnly;
+        public bool balanceMeasureOnly;
 
-        public readonly RCSRotationBalancer RotationBalancer = new RCSRotationBalancer();
+        public readonly RCSCommandBalancer CommandBalancer = new RCSCommandBalancer();
 
         // Whether the old translation solver drives the thrusters (VesselState asks it for the available thrust).
-        public bool UsesTranslationSolver => Enabled && smartTranslation && !smartRotation;
+        public bool UsesTranslationSolver => Enabled && smartTranslation && !smartTranslationRotation;
 
         // Overdrive
         [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL)), EditableInfoItem("#MechJeb_RCSBalancerOverdrive", InfoItem.Category.Thrust, rightLabel = "%")]
@@ -188,7 +188,7 @@ namespace MuMech
         public MechJebModuleRCSBalancer(MechJebCore core)
             : base(core)
         {
-            // After the attitude controller (800), so that smart rotation sees its pitch/yaw/roll.
+            // After the attitude controller (800), so that smart translation & rotation sees its pitch/yaw/roll.
             Priority = 900;
         }
 
@@ -203,7 +203,7 @@ namespace MuMech
         protected override void OnModuleDisabled()
         {
             solverThread.Stop();
-            RotationBalancer.RestoreAll();
+            CommandBalancer.RestoreAll();
 
             base.OnModuleDisabled();
         }
@@ -305,15 +305,30 @@ namespace MuMech
         }
          */
 
+        // OnFixedUpdate runs for the balancer of every loaded vessel, Drive only for the one flown by this core.  When
+        // Drive stops (vessel switch, control lost), the thrusters go back to stock instead of keeping the multipliers
+        // of the last command.
+        private int _stepsSinceDrive;
+
+        public override void OnFixedUpdate()
+        {
+            if (++_stepsSinceDrive > 2)
+                CommandBalancer.RestoreAll();
+
+            base.OnFixedUpdate();
+        }
+
         public override void Drive(FlightCtrlState s)
         {
-            if (smartRotation)
+            _stepsSinceDrive = 0;
+
+            if (smartTranslationRotation)
             {
-                RotationBalancer.Solver.ForceWeight = rotationForceWeight;
-                RotationBalancer.RotationTorqueWeight = rotationTorqueWeight;
-                RotationBalancer.TranslationTorqueWeight = translationTorqueWeight;
-                RotationBalancer.Solver.ThrustWeight = rotationThrustWeight;
-                RotationBalancer.Drive(Vessel, s, rotationMeasureOnly);
+                CommandBalancer.Solver.ForceWeight = balanceForceWeight;
+                CommandBalancer.RotationTorqueWeight = balanceTorqueWeight;
+                CommandBalancer.TranslationTorqueWeight = balanceTranslationTorqueWeight;
+                CommandBalancer.Solver.ThrustWeight = balanceThrustWeight;
+                CommandBalancer.Drive(Vessel, s, balanceMeasureOnly);
             }
             else if (smartTranslation)
             {

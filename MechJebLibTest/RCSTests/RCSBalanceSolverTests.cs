@@ -267,7 +267,7 @@ namespace MechJebLibTest.RCSTests
         }
 
         [Fact]
-        public void WarmStartIsFast()
+        public void WarmStartNeedsFewIterations()
         {
             List<List<Nozzle>> probe = Probe(5, -5);
             probe.AddRange(Probe(2, -3)); // 16 modules
@@ -291,12 +291,14 @@ namespace MechJebLibTest.RCSTests
                 sw.Start();
                 Assert.True(solver.Solve(V3.zero, rot));
                 sw.Stop();
+                Assert.True(solver.Converged);
                 iterations += solver.Iterations;
             }
 
+            // Timing is only reported: a time limit would fail randomly on a slow CI machine.
             double ms = sw.Elapsed.TotalMilliseconds / STEPS;
             _testOutputHelper.WriteLine($"average {ms:F4} ms, {(double)iterations / STEPS:F1} iterations");
-            Assert.True(ms < 0.1);
+            Assert.True((double)iterations / STEPS < 3);
         }
 
         [Fact]

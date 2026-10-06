@@ -743,6 +743,10 @@ namespace MuMech
                     }
                 }
             }
+
+            // Smart translation & rotation throttles thrusters down: the attitude controller must not count on that torque.
+            if (rcsbal.Enabled && rcsbal.smartTranslationRotation)
+                rcsbal.CommandBalancer.ScaleTorqueAvailable(RCSTorqueAvailable);
         }
 
         [GeneralInfoItem("#MechJeb_RCSTranslation", InfoItem.Category.Vessel, showInEditor = true)] //RCS Translation

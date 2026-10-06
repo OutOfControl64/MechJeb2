@@ -1,6 +1,6 @@
+using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Reflection;
 using MechJebLib.Primitives;
 using MechJebLib.RCS;
 using MechJebLibBindings;
@@ -16,7 +16,7 @@ namespace MuMech
     // and thrustPercentage in FixedUpdate, so writing thrusterPower in flight does not change the thrust.  This class
     // scales maxFuelFlow instead (ModuleRCSExtensions): it is not persisted, it scales thrust and propellant flow
     // together and the nozzle throttle does not depend on it, so force and torque stay linear in the multipliers.
-    public class RCSRotationBalancer
+    public class RCSCommandBalancer
     {
         private class ModuleState
         {
@@ -77,6 +77,31 @@ namespace MuMech
         private double _measuredLeakImpulse, _measuredThrustImpulse;
         private double _predictedLeakImpulse, _predictedThrustImpulse;
 
+        // Torque kept by balancing for full pitch, roll and yaw commands, for the attitude controller's torque estimate
+        // (VesselState.RCSTorqueAvailable assumes stock thrust).  Index 2 * axis + (0 positive, 1 negative), axes of
+        // the control reference frame: x pitch, y roll, z yaw.  Updated every few physics steps.
+        private readonly double[] _axisKept = { 1, 1, 1, 1, 1, 1 };
+        private readonly RCSBalanceSolver[] _axisSolvers =
+        {
+            new RCSBalanceSolver(), new RCSBalanceSolver(), new RCSBalanceSolver(),
+            new RCSBalanceSolver(), new RCSBalanceSolver(), new RCSBalanceSolver()
+        };
+        private readonly List<ModuleRCS> _thrusting = new List<ModuleRCS>();
+        private readonly List<V3> _axisForces = new List<V3>();
+        private readonly List<V3> _axisTorques = new List<V3>();
+        private int _stepsSinceAxisUpdate = AXIS_UPDATE_STEPS;
+        private const int AXIS_UPDATE_STEPS = 10;
+
+        /// <summary>Torque kept on a control axis (0 pitch, 1 roll, 2 yaw), the lower of both directions.</summary>
+        public double AxisTorqueKept(int axis) => Min(_axisKept[2 * axis], _axisKept[2 * axis + 1]);
+
+        /// <summary>Scales a stock torque estimate (in the control reference frame) by the torque kept by balancing.</summary>
+        public void ScaleTorqueAvailable(Vector6 torque)
+        {
+            torque.Positive = new Vector3d(torque.Positive.x * _axisKept[0], torque.Positive.y * _axisKept[2], torque.Positive.z * _axisKept[4]);
+            torque.Negative = new Vector3d(torque.Negative.x * _axisKept[1], torque.Negative.y * _axisKept[3], torque.Negative.z * _axisKept[5]);
+        }
+
         public void Drive(Vessel vessel, FlightCtrlState s, bool measureOnly)
         {
             foreach (ModuleState state in _states.Values)
@@ -84,6 +109,7 @@ namespace MuMech
 
             _active.Clear();
             _thrusts.Clear();
+            _thrusting.Clear();
 
             bool rcsGroup = vessel.ActionGroups[KSPActionGroup.RCS];
             Quaternion reference = vessel.ReferenceTransform.rotation;
@@ -118,6 +144,8 @@ namespace MuMech
                         continue;
                     }
 
+                    _thrusting.Add(rcs);
+
                     ModuleInput(rcs, s, reference, out V3 inputRot, out V3 inputLin, out bool precision);
                     commandRot += inputRot;
                     commandLin += inputLin;
@@ -135,6 +163,12 @@ namespace MuMech
             }
 
             RestoreUnseen();
+
+            if (++_stepsSinceAxisUpdate >= AXIS_UPDATE_STEPS)
+            {
+                _stepsSinceAxisUpdate = 0;
+                UpdateAxisTorqueKept(reference, com, measureOnly);
+            }
 
             int n = _active.Count;
             ModuleCount = n;
@@ -242,9 +276,10 @@ namespace MuMech
             FiringTime += dt;
         }
 
-        private static readonly FieldInfo _inputRotField = typeof(ModuleRCS).GetField("inputRot", BindingFlags.Instance | BindingFlags.NonPublic);
-        private static readonly FieldInfo _inputLinField = typeof(ModuleRCS).GetField("inputLin", BindingFlags.Instance | BindingFlags.NonPublic);
-        private static readonly FieldInfo _usePrecisionField = typeof(ModuleRCS).GetField("usePrecision", BindingFlags.Instance | BindingFlags.NonPublic);
+        // Compiled getters of private ModuleRCS fields (null if missing): called for every module every physics step.
+        private static readonly Func<ModuleRCS, Vector3> _inputRot = ReflectionUtils.FieldGetter<ModuleRCS, Vector3>("inputRot");
+        private static readonly Func<ModuleRCS, Vector3> _inputLin = ReflectionUtils.FieldGetter<ModuleRCS, Vector3>("inputLin");
+        private static readonly Func<ModuleRCS, bool> _usePrecision = ReflectionUtils.FieldGetter<ModuleRCS, bool>("usePrecision");
 
         // The command the module will execute in its next FixedUpdate.  ModuleRCS samples vessel.ctrlState once per
         // rendered frame (in Update) and reuses it for every physics step of that frame, while SAS and the attitude
@@ -253,11 +288,11 @@ namespace MuMech
         private static void ModuleInput(ModuleRCS rcs, FlightCtrlState s, Quaternion reference, out V3 inputRot, out V3 inputLin,
             out bool precision)
         {
-            if (_inputRotField != null && _inputLinField != null && _usePrecisionField != null)
+            if (_inputRot != null && _inputLin != null && _usePrecision != null)
             {
-                inputRot = ((Vector3d)(Vector3)_inputRotField.GetValue(rcs)).ToV3();
-                inputLin = ((Vector3d)(Vector3)_inputLinField.GetValue(rcs)).ToV3();
-                precision = (bool)_usePrecisionField.GetValue(rcs);
+                inputRot = ((Vector3d)_inputRot(rcs)).ToV3();
+                inputLin = ((Vector3d)_inputLin(rcs)).ToV3();
+                precision = _usePrecision(rcs);
                 return;
             }
 
@@ -322,6 +357,8 @@ namespace MuMech
             }
 
             _states.Clear();
+            for (int i = 0; i < _axisKept.Length; i++)
+                _axisKept[i] = 1;
             _active.Clear();
             ModuleCount = 0;
         }
@@ -357,6 +394,70 @@ namespace MuMech
         }
 
         // ModuleRCS.Update: pitch/roll/yaw in the vessel frame, rotated by the control reference.
+        // Balances a full pitch, roll and yaw command of each sign like Drive would, and stores which share of the
+        // torque along that axis is left, so that the attitude controller does not count on torque the balancer takes
+        // away.  The stock torque estimate goes into the slot of the direction the command actually turns the vessel.
+        private void UpdateAxisTorqueKept(Quaternion reference, Vector3d com, bool measureOnly)
+        {
+            for (int i = 0; i < _axisKept.Length; i++)
+                _axisKept[i] = 1;
+
+            if (measureOnly || _thrusting.Count == 0)
+                return;
+
+            bool precision = FlightInputHandler.fetch != null && FlightInputHandler.fetch.precisionMode;
+
+            for (int c = 0; c < _axisSolvers.Length; c++)
+            {
+                int axis = c / 2;
+                var command = Vector3.zero;
+                command[axis] = c % 2 == 0 ? 1 : -1;
+                var unit = Vector3.zero;
+                unit[axis] = 1;
+                V3 axisDir = ((Vector3d)(reference * unit)).ToV3();
+
+                _axisForces.Clear();
+                _axisTorques.Clear();
+                for (int m = 0; m < _thrusting.Count; m++)
+                {
+                    ModuleRCS rcs = _thrusting[m];
+                    var masked = new Vector3(rcs.enablePitch ? command.x : 0, rcs.enableRoll ? command.y : 0, rcs.enableYaw ? command.z : 0);
+                    V3 inputRot = ((Vector3d)(reference * masked)).ToV3();
+
+                    ModuleForceAndTorque(rcs, inputRot, V3.zero, com, precision, out V3 force, out V3 torque, out _);
+                    if (force == V3.zero)
+                        continue;
+
+                    _axisForces.Add(force);
+                    _axisTorques.Add(torque);
+                }
+
+                RCSBalanceSolver solver = _axisSolvers[c];
+                solver.Resize(_axisForces.Count);
+                for (int i = 0; i < _axisForces.Count; i++)
+                    solver.SetModule(i, _axisForces[i], _axisTorques[i]);
+
+                solver.ForceWeight = _solver.ForceWeight;
+                solver.TorqueWeight = RotationTorqueWeight;
+                solver.ThrustWeight = _solver.ThrustWeight;
+                if (_axisForces.Count == 0 || !solver.Solve(V3.zero, ((Vector3d)(reference * command)).ToV3()))
+                    continue;
+
+                double stock = 0, balanced = 0;
+                for (int i = 0; i < _axisTorques.Count; i++)
+                {
+                    double along = V3.Dot(_axisTorques[i], axisDir);
+                    stock += along;
+                    balanced += Max(solver.X[i], MIN_MULTIPLIER) * along;
+                }
+
+                if (Abs(stock) < 1e-9)
+                    continue;
+
+                _axisKept[2 * axis + (stock > 0 ? 0 : 1)] = Min(Max(balanced / stock, 0), 1);
+            }
+        }
+
         private static Vector3 CommandRot(FlightCtrlState s, Quaternion reference, bool pitch, bool roll, bool yaw, float epsilon)
         {
             float eps2 = epsilon * epsilon;

@@ -35,7 +35,10 @@ namespace MuMech
         private readonly List<double> _thrusts = new List<double>();
         private double[] _ones = new double[0];
         private double[] _applied = new double[0]; // multipliers written to the modules (floored, or 1 when measuring only)
-        private bool _translating;
+        private int _translationHold; // physics steps still treated as translating (see Step)
+        private bool _commandTranslating; // last Balance saw a translation command
+        private double _predictedLeak, _predictedThrust; // kN, of the last Balance, integrated by Step
+        private const int TRANSLATION_HOLD_STEPS = 3;
 
         // Never write a zero maxFuelFlow: ModuleRCS.RequestPropellant(0) divides 0 by 0, the NaN marks the module as
         // flamed out, and a flamed-out module is excluded from balancing, so it would stay at zero thrust for good.
@@ -79,7 +82,7 @@ namespace MuMech
 
         // Torque kept by balancing for full pitch, roll and yaw commands, for the attitude controller's torque estimate
         // (VesselState.RCSTorqueAvailable assumes stock thrust).  Index 2 * axis + (0 positive, 1 negative), axes of
-        // the control reference frame: x pitch, y roll, z yaw.  Updated every few physics steps.
+        // the control reference frame: x pitch, y roll, z yaw.  Updated every few frames.
         private readonly double[] _axisKept = { 1, 1, 1, 1, 1, 1 };
         private readonly RCSBalanceSolver[] _axisSolvers =
         {
@@ -102,7 +105,11 @@ namespace MuMech
             torque.Negative = new Vector3d(torque.Negative.x * _axisKept[1], torque.Negative.y * _axisKept[3], torque.Negative.z * _axisKept[5]);
         }
 
-        public void Drive(Vessel vessel, FlightCtrlState s, bool measureOnly)
+        // Called once per rendered frame, after every Update (TimingManager LateUpdate).  ModuleRCS samples its command
+        // in Update and reuses it for all physics steps until the next frame, so multipliers computed here are exactly
+        // for the command the nozzles fire next.  Computed in a physics step instead, they would lag one frame behind
+        // the command whenever it changes every frame (SAS, SmartASS).
+        public void Balance(Vessel vessel, FlightCtrlState s, bool measureOnly)
         {
             foreach (ModuleState state in _states.Values)
                 state.Seen = false;
@@ -114,8 +121,6 @@ namespace MuMech
             bool rcsGroup = vessel.ActionGroups[KSPActionGroup.RCS];
             Quaternion reference = vessel.ReferenceTransform.rotation;
             Vector3d com = vessel.CurrentCoM;
-
-            Measure(vessel);
 
             // The vessel-wide command lines, summed from what the modules will actually execute.
             V3 commandRot = V3.zero, commandLin = V3.zero;
@@ -172,7 +177,9 @@ namespace MuMech
 
             int n = _active.Count;
             ModuleCount = n;
-            _translating = commandLin != V3.zero;
+            _commandTranslating = commandLin != V3.zero;
+            _predictedLeak = 0;
+            _predictedThrust = 0;
 
             if (n == 0)
             {
@@ -219,16 +226,26 @@ namespace MuMech
 
             UpdateReport(vessel, commandLin, commandRot);
 
-            if (_translating)
+            _predictedLeak = BalancedLeak;
+            for (int i = 0; i < n; i++)
+                _predictedThrust += _applied[i] * _thrusts[i];
+        }
+
+        // Called every physics step while this core flies the vessel: measures what the game applied and integrates
+        // the prediction of the last Balance.
+        public void Step(Vessel vessel)
+        {
+            // The forces read by Measure come from the last RCS FixedUpdate, which may have used an older command: keep
+            // counting a few steps after a translation as translating, so its thrust is not taken for a leak.
+            _translationHold = _commandTranslating ? TRANSLATION_HOLD_STEPS : Max(_translationHold - 1, 0);
+            Measure(vessel);
+
+            if (_translationHold > 0)
                 return;
 
-            double totalThrust = 0;
-            for (int i = 0; i < n; i++)
-                totalThrust += _applied[i] * _thrusts[i];
-
             double dt = TimeWarp.fixedDeltaTime;
-            _predictedLeakImpulse += BalancedLeak * dt;
-            _predictedThrustImpulse += totalThrust * dt;
+            _predictedLeakImpulse += _predictedLeak * dt;
+            _predictedThrustImpulse += _predictedThrust * dt;
         }
 
         // Net force the game actually applied in its last RCS FixedUpdate (ModuleRCS.thrustForces), integrated into a
@@ -261,7 +278,7 @@ namespace MuMech
             double mass = vessel.totalMass;
             MeasuredAccel = mass > 0 ? force.magnitude / mass : 0;
 
-            if (_translating || mass <= 0)
+            if (_translationHold > 0 || mass <= 0)
                 return;
 
             double dt = TimeWarp.fixedDeltaTime;
@@ -510,7 +527,7 @@ namespace MuMech
                 V3 position = ((Vector3d)nozzle.position - com).ToV3();
 
                 double throttle = RCSNozzleModel.Throttle(axis, position, inputRot, inputLin, rcs.fullThrust, rcs.fullThrustMin, precision,
-                    rcs.useLever, rcs.precisionFactor);
+                    rcs.useLever, rcs.precisionFactor, rcs.EPSILON);
                 if (throttle <= 0)
                     continue;
 

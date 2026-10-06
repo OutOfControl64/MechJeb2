@@ -24,8 +24,12 @@ namespace MechJebLib.RCS
         /// <param name="position">nozzle position relative to the CoM</param>
         /// <param name="inputRot">pitch/roll/yaw command rotated into the frame, with disabled axes zeroed</param>
         /// <param name="inputLin">translation command rotated into the frame, with disabled axes zeroed</param>
+        /// <param name="minThrottle">
+        ///     ModuleRCS.EPSILON: CalculateThrust gives no thrust at a throttle up to this, which matters for the small
+        ///     commands of SAS and SmartASS
+        /// </param>
         public static double Throttle(V3 nozzleAxis, V3 position, V3 inputRot, V3 inputLin, bool fullThrust, double fullThrustMin,
-            bool precision, bool useLever, double precisionFactor)
+            bool precision, bool useLever, double precisionFactor, double minThrottle)
         {
             V3 lever = V3.ProjectOnPlane(position, inputRot);
             V3 leverDir = lever.magnitude > UNITY_NORMALIZE_EPSILON ? lever.normalized : V3.zero;
@@ -52,7 +56,7 @@ namespace MechJebLib.RCS
                 }
             }
 
-            return throttle;
+            return throttle > minThrottle ? throttle : 0;
         }
 
         /// <summary>

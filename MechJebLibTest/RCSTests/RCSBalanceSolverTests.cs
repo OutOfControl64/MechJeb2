@@ -65,7 +65,7 @@ namespace MechJebLibTest.RCSTests
                 foreach (Nozzle n in modules[i])
                 {
                     V3 position = n.Position - com;
-                    double throttle = RCSNozzleModel.Throttle(n.Axis, position, rot, lin, false, 0.2, false, true, 0.1);
+                    double throttle = RCSNozzleModel.Throttle(n.Axis, position, rot, lin, false, 0.2, false, true, 0.1, 0);
                     V3 f = -throttle * p * n.Axis;
                     force += f;
                     torque += V3.Cross(position, f);
@@ -90,8 +90,8 @@ namespace MechJebLibTest.RCSTests
             // Stock normalizes the lever, so a nozzle twice as far from the CoM gets the same throttle.
             var rot = new V3(1, 0, 0);
             var axis = new V3(0, -1, 0); // cross((1, 0, 0), (0, 0, 1)) = (0, -1, 0)
-            double near = RCSNozzleModel.Throttle(axis, new V3(0, 0, 1), rot, V3.zero, false, 0.2, false, true, 0.1);
-            double far = RCSNozzleModel.Throttle(axis, new V3(0, 0, 2), rot, V3.zero, false, 0.2, false, true, 0.1);
+            double near = RCSNozzleModel.Throttle(axis, new V3(0, 0, 1), rot, V3.zero, false, 0.2, false, true, 0.1, 0);
+            double far = RCSNozzleModel.Throttle(axis, new V3(0, 0, 2), rot, V3.zero, false, 0.2, false, true, 0.1, 0);
 
             Assert.Equal(1.0, near, 12);
             Assert.Equal(near, far, 12);
@@ -101,10 +101,10 @@ namespace MechJebLibTest.RCSTests
         public void NozzleThrottleSumsRotationAndTranslationAndClamps()
         {
             var axis = new V3(0, -1, 0); // cross((1, 0, 0), (0, 0, 1)) = (0, -1, 0)
-            double t = RCSNozzleModel.Throttle(axis, new V3(0, 0, 1), new V3(0.6, 0, 0), new V3(0, -0.7, 0), false, 0.2, false, true, 0.1);
+            double t = RCSNozzleModel.Throttle(axis, new V3(0, 0, 1), new V3(0.6, 0, 0), new V3(0, -0.7, 0), false, 0.2, false, true, 0.1, 0);
             Assert.Equal(1.0, t, 12);
 
-            t = RCSNozzleModel.Throttle(axis, new V3(0, 0, 1), new V3(0.3, 0, 0), new V3(0, -0.4, 0), false, 0.2, false, true, 0.1);
+            t = RCSNozzleModel.Throttle(axis, new V3(0, 0, 1), new V3(0.3, 0, 0), new V3(0, -0.4, 0), false, 0.2, false, true, 0.1, 0);
             Assert.Equal(0.7, t, 12);
         }
 
@@ -115,11 +115,24 @@ namespace MechJebLibTest.RCSTests
             var position = new V3(0, 0, 4);
             var lin = new V3(0, 0.3, 0);
 
-            Assert.Equal(1.0, RCSNozzleModel.Throttle(axis, position, V3.zero, lin, true, 0.2, false, true, 0.1), 12);
-            Assert.Equal(0.3, RCSNozzleModel.Throttle(axis, position, V3.zero, lin, true, 0.5, false, true, 0.1), 12);
-            Assert.Equal(0.03, RCSNozzleModel.Throttle(axis, position, V3.zero, lin, false, 0.2, true, false, 0.1), 12);
+            Assert.Equal(1.0, RCSNozzleModel.Throttle(axis, position, V3.zero, lin, true, 0.2, false, true, 0.1, 0), 12);
+            Assert.Equal(0.3, RCSNozzleModel.Throttle(axis, position, V3.zero, lin, true, 0.5, false, true, 0.1, 0), 12);
+            Assert.Equal(0.03, RCSNozzleModel.Throttle(axis, position, V3.zero, lin, false, 0.2, true, false, 0.1, 0), 12);
             // lever distance of the CoM from the thrust line is 4 m
-            Assert.Equal(0.3 / 4, RCSNozzleModel.Throttle(axis, position, V3.zero, lin, false, 0.2, true, true, 0.1), 12);
+            Assert.Equal(0.3 / 4, RCSNozzleModel.Throttle(axis, position, V3.zero, lin, false, 0.2, true, true, 0.1, 0), 12);
+        }
+
+        [Fact]
+        public void NozzleBelowMinimumThrottleDoesNotFire()
+        {
+            // ModuleRCS.CalculateThrust gives no thrust at a throttle up to EPSILON (0.05).
+            var axis = new V3(0, 1, 0);
+            var position = new V3(0, 0, 4);
+
+            Assert.Equal(0.0, RCSNozzleModel.Throttle(axis, position, V3.zero, new V3(0, 0.05, 0), false, 0.2, false, true, 0.1, 0.05), 12);
+            Assert.Equal(0.06, RCSNozzleModel.Throttle(axis, position, V3.zero, new V3(0, 0.06, 0), false, 0.2, false, true, 0.1, 0.05), 12);
+            // the threshold applies after the precision scaling
+            Assert.Equal(0.0, RCSNozzleModel.Throttle(axis, position, V3.zero, new V3(0, 0.3, 0), false, 0.2, true, false, 0.1, 0.05), 12);
         }
 
         [Fact]

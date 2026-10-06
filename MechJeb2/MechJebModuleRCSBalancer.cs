@@ -1,4 +1,5 @@
 extern alias JetBrainsAnnotations;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using KSP.Localization;
@@ -196,6 +197,7 @@ namespace MuMech
         {
             UpdateTuningParameters();
             solverThread.Start();
+            TimingManager.LateUpdateAdd(TimingManager.TimingStage.Normal, OnLateUpdate);
 
             base.OnModuleEnabled();
         }
@@ -203,9 +205,17 @@ namespace MuMech
         protected override void OnModuleDisabled()
         {
             solverThread.Stop();
+            TimingManager.LateUpdateRemove(TimingManager.TimingStage.Normal, OnLateUpdate);
             CommandBalancer.RestoreAll();
 
             base.OnModuleDisabled();
+        }
+
+        public override void OnDestroy()
+        {
+            TimingManager.LateUpdateRemove(TimingManager.TimingStage.Normal, OnLateUpdate);
+
+            base.OnDestroy();
         }
 
         public void ResetThrusterForces() => solverThread.ResetThrusterForces();
@@ -309,13 +319,35 @@ namespace MuMech
         // Drive stops (vessel switch, control lost), the thrusters go back to stock instead of keeping the multipliers
         // of the last command.
         private int _stepsSinceDrive;
+        private const int MAX_STEPS_WITHOUT_DRIVE = 2;
 
         public override void OnFixedUpdate()
         {
-            if (++_stepsSinceDrive > 2)
+            if (++_stepsSinceDrive > MAX_STEPS_WITHOUT_DRIVE)
                 CommandBalancer.RestoreAll();
 
             base.OnFixedUpdate();
+        }
+
+        // Smart translation & rotation balances once per rendered frame, after ModuleRCS.Update has sampled the command
+        // (see RCSCommandBalancer.Balance), and only measures in Drive.
+        private void OnLateUpdate()
+        {
+            if (!smartTranslationRotation || _stepsSinceDrive > MAX_STEPS_WITHOUT_DRIVE || Vessel == null)
+                return;
+
+            try
+            {
+                CommandBalancer.Solver.ForceWeight = balanceForceWeight;
+                CommandBalancer.RotationTorqueWeight = balanceTorqueWeight;
+                CommandBalancer.TranslationTorqueWeight = balanceTranslationTorqueWeight;
+                CommandBalancer.Solver.ThrustWeight = balanceThrustWeight;
+                CommandBalancer.Balance(Vessel, Vessel.ctrlState, balanceMeasureOnly);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("MechJeb module MechJebModuleRCSBalancer threw an exception in OnLateUpdate: " + e);
+            }
         }
 
         public override void Drive(FlightCtrlState s)
@@ -324,11 +356,7 @@ namespace MuMech
 
             if (smartTranslationRotation)
             {
-                CommandBalancer.Solver.ForceWeight = balanceForceWeight;
-                CommandBalancer.RotationTorqueWeight = balanceTorqueWeight;
-                CommandBalancer.TranslationTorqueWeight = balanceTranslationTorqueWeight;
-                CommandBalancer.Solver.ThrustWeight = balanceThrustWeight;
-                CommandBalancer.Drive(Vessel, s, balanceMeasureOnly);
+                CommandBalancer.Step(Vessel);
             }
             else if (smartTranslation)
             {

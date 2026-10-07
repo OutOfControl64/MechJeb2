@@ -83,6 +83,7 @@
         <Compile Include="RootfindingTests\BisectionTests.cs"/>
         <Compile Include="RootfindingTests\BrentRootTests.cs"/>
         <Compile Include="RootfindingTests\NewtonTests.cs"/>
+        <Compile Include="RCSTests\RCSBalanceSolverTests.cs"/>
         <Compile Include="StaticTests.cs"/>
         <Compile Include="Primitives\HTests.cs"/>
         <Compile Include="Primitives\M3Tests.cs"/>

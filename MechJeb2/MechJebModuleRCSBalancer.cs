@@ -1,4 +1,5 @@
-﻿extern alias JetBrainsAnnotations;
+extern alias JetBrainsAnnotations;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using KSP.Localization;
@@ -9,13 +10,46 @@ namespace MuMech
 {
     public class MechJebModuleRCSBalancer : ComputerModule
     {
-        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
-        [ToggleInfoItem("#MechJeb_smartTranslation", InfoItem.Category.Thrust)] //Smart RCS translation
+        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL)), ToggleInfoItem("#MechJeb_smartTranslation", InfoItem.Category.Thrust)]
+        //Smart RCS translation
         public bool smartTranslation;
 
-        // Overdrive
+        // "Smart translation & rotation": balances rotation, translation and mixed commands every physics frame.
+        // Exclusive with smartTranslation (the window keeps only one on; if both are set, this one wins).
+        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL)), ToggleInfoItem("#MechJeb_smartTranslationRotation", InfoItem.Category.Thrust)]
+        public bool smartTranslationRotation;
+
+        // Smart translation & rotation: weights of the force leak, the torque leak and the lost thrust.  The torque weight is low
+        // while rotating (the attitude controller corrects torque errors, nothing corrects a force leak) and high for
+        // pure translation (the torque is then the whole leak).
         [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
-        [EditableInfoItem("#MechJeb_RCSBalancerOverdrive", InfoItem.Category.Thrust, rightLabel = "%")] //RCS balancer overdrive
+        public readonly EditableDouble balanceForceWeight = 1;
+
+        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
+        public readonly EditableDouble balanceTorqueWeight = 0.05;
+
+        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
+        public readonly EditableDouble balanceTranslationTorqueWeight = 1;
+
+        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
+        public readonly EditableDouble balanceThrustWeight = 0.001;
+
+        // Smart translation & rotation: whether the window's measurements section is open (the tuning section uses advancedOptions).
+        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
+        public bool showMeasurements;
+
+        // Smart translation & rotation: compute and measure, but leave the thrusters at stock (for comparison).
+        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL))]
+        public bool balanceMeasureOnly;
+
+        public readonly RCSCommandBalancer CommandBalancer = new RCSCommandBalancer();
+
+        // Whether the old translation solver drives the thrusters (VesselState asks it for the available thrust).
+        public bool UsesTranslationSolver => Enabled && smartTranslation && !smartTranslationRotation;
+
+        // Overdrive
+        [Persistent(pass = (int)(Pass.TYPE | Pass.GLOBAL)), EditableInfoItem("#MechJeb_RCSBalancerOverdrive", InfoItem.Category.Thrust, rightLabel = "%")]
+        //RCS balancer overdrive
         public EditableDoubleMult overdrive = new EditableDoubleMult(1, 0.01);
 
         // Advanced options
@@ -40,9 +74,9 @@ namespace MuMech
         public readonly EditableDouble tuningParamFactorWaste = 1;
 
         // Variables for RCS solving.
-        private readonly RCSSolverThread          solverThread = new RCSSolverThread();
-        private          List<RCSSolver.Thruster> thrusters;
-        private          double[]                 throttles;
+        private readonly RCSSolverThread solverThread = new RCSSolverThread();
+        private List<RCSSolver.Thruster> thrusters;
+        private double[] throttles;
 
         [EditableInfoItem("#MechJeb_RCSBalancerPrecision", InfoItem.Category.Thrust)] //RCS balancer precision
         public readonly EditableInt calcPrecision = 3;
@@ -52,23 +86,23 @@ namespace MuMech
         {
             GUILayout.BeginVertical();
             GuiUtils.SimpleLabel(Localizer.Format("#MechJeb_RCSBalancerInfo_Label1"),
-                (solverThread.CalculationTime * 1000).ToString("F0") + " ms");                                    //"Calculation time"
+                (solverThread.CalculationTime * 1000).ToString("F0") + " ms"); //"Calculation time"
             GuiUtils.SimpleLabelInt(Localizer.Format("#MechJeb_RCSBalancerInfo_Label2"), solverThread.TaskCount); //"Pending tasks"
 
-            GuiUtils.SimpleLabelInt(Localizer.Format("#MechJeb_RCSBalancerInfo_Label3"), solverThread.CacheSize);   //"Cache size"
-            GuiUtils.SimpleLabelInt(Localizer.Format("#MechJeb_RCSBalancerInfo_Label4"), solverThread.CacheHits);   //"Cache hits"
+            GuiUtils.SimpleLabelInt(Localizer.Format("#MechJeb_RCSBalancerInfo_Label3"), solverThread.CacheSize); //"Cache size"
+            GuiUtils.SimpleLabelInt(Localizer.Format("#MechJeb_RCSBalancerInfo_Label4"), solverThread.CacheHits); //"Cache hits"
             GuiUtils.SimpleLabelInt(Localizer.Format("#MechJeb_RCSBalancerInfo_Label5"), solverThread.CacheMisses); //"Cache misses"
 
-            GuiUtils.SimpleLabel(Localizer.Format("#MechJeb_RCSBalancerInfo_Label6"), solverThread.ComError.ToSI() + "m");          //"CoM shift"
+            GuiUtils.SimpleLabel(Localizer.Format("#MechJeb_RCSBalancerInfo_Label6"), solverThread.ComError.ToSI() + "m"); //"CoM shift"
             GuiUtils.SimpleLabel(Localizer.Format("#MechJeb_RCSBalancerInfo_Label7"), solverThread.ComErrorThreshold.ToSI() + "m"); //"CoM recalc"
-            GuiUtils.SimpleLabel(Localizer.Format("#MechJeb_RCSBalancerInfo_Label8"), solverThread.MaxComError.ToSI() + "m");       //"Max CoM shift"
+            GuiUtils.SimpleLabel(Localizer.Format("#MechJeb_RCSBalancerInfo_Label8"), solverThread.MaxComError.ToSI() + "m"); //"Max CoM shift"
 
             GuiUtils.SimpleLabel(Localizer.Format("#MechJeb_RCSBalancerInfo_Label9"), solverThread.StatusString); //"Status"
 
             string error = solverThread.ErrorString;
             if (!string.IsNullOrEmpty(error))
             {
-                GUILayout.Label(error, GUILayout.ExpandWidth(true));
+                GUILayout.Label(error, GuiUtils.LayoutExpandWidth);
             }
 
             GUILayout.EndVertical();
@@ -92,7 +126,7 @@ namespace MuMech
                         thrusterStates += " ";
                     }
 
-                    firstRcsModule =  false;
+                    firstRcsModule = false;
                     thrusterStates += $"({pm.thrusterPower * 9:F0}:";
                     for (int i = 0; i < pm.thrustForces.Length; i++)
                     {
@@ -130,7 +164,7 @@ namespace MuMech
                         thrusterStates += " ";
                     }
 
-                    firstRcsModule =  false;
+                    firstRcsModule = false;
                     thrusterStates += pm.thrusterPower.ToString("F1");
                 }
             }
@@ -155,13 +189,15 @@ namespace MuMech
         public MechJebModuleRCSBalancer(MechJebCore core)
             : base(core)
         {
-            Priority = 700;
+            // After the attitude controller (800), so that smart translation & rotation sees its pitch/yaw/roll.
+            Priority = 900;
         }
 
         protected override void OnModuleEnabled()
         {
             UpdateTuningParameters();
             solverThread.Start();
+            TimingManager.LateUpdateAdd(TimingManager.TimingStage.Normal, OnLateUpdate);
 
             base.OnModuleEnabled();
         }
@@ -169,8 +205,17 @@ namespace MuMech
         protected override void OnModuleDisabled()
         {
             solverThread.Stop();
+            TimingManager.LateUpdateRemove(TimingManager.TimingStage.Normal, OnLateUpdate);
+            CommandBalancer.RestoreAll();
 
             base.OnModuleDisabled();
+        }
+
+        public override void OnDestroy()
+        {
+            TimingManager.LateUpdateRemove(TimingManager.TimingStage.Normal, OnLateUpdate);
+
+            base.OnDestroy();
         }
 
         public void ResetThrusterForces() => solverThread.ResetThrusterForces();
@@ -215,7 +260,7 @@ namespace MuMech
             // better to not move at all than move in the wrong direction.
             if (throttles.Length != thrusters.Count)
             {
-                throttles    = new double[thrusters.Count];
+                throttles = new double[thrusters.Count];
                 cutThrottles = true;
             }
 
@@ -238,10 +283,10 @@ namespace MuMech
         {
             double wasteThreshold = overdrive * overdriveScale;
             var tuningParams = new RCSSolverTuningParams();
-            tuningParams.WasteThreshold  = wasteThreshold;
-            tuningParams.FactorTorque    = tuningParamFactorTorque;
+            tuningParams.WasteThreshold = wasteThreshold;
+            tuningParams.FactorTorque = tuningParamFactorTorque;
             tuningParams.FactorTranslate = tuningParamFactorTranslate;
-            tuningParams.FactorWaste     = tuningParamFactorWaste;
+            tuningParams.FactorWaste = tuningParamFactorWaste;
             solverThread.UpdateTuningParameters(tuningParams);
         }
 
@@ -270,9 +315,50 @@ namespace MuMech
         }
          */
 
+        // OnFixedUpdate runs for the balancer of every loaded vessel, Drive only for the one flown by this core.  When
+        // Drive stops (vessel switch, control lost), the thrusters go back to stock instead of keeping the multipliers
+        // of the last command.
+        private int _stepsSinceDrive;
+        private const int MAX_STEPS_WITHOUT_DRIVE = 2;
+
+        public override void OnFixedUpdate()
+        {
+            if (++_stepsSinceDrive > MAX_STEPS_WITHOUT_DRIVE)
+                CommandBalancer.RestoreAll();
+
+            base.OnFixedUpdate();
+        }
+
+        // Smart translation & rotation balances once per rendered frame, after ModuleRCS.Update has sampled the command
+        // (see RCSCommandBalancer.Balance), and only measures in Drive.
+        private void OnLateUpdate()
+        {
+            if (!smartTranslationRotation || _stepsSinceDrive > MAX_STEPS_WITHOUT_DRIVE || Vessel == null)
+                return;
+
+            try
+            {
+                CommandBalancer.Solver.ForceWeight = balanceForceWeight;
+                CommandBalancer.RotationTorqueWeight = balanceTorqueWeight;
+                CommandBalancer.TranslationTorqueWeight = balanceTranslationTorqueWeight;
+                CommandBalancer.Solver.ThrustWeight = balanceThrustWeight;
+                CommandBalancer.Balance(Vessel, Vessel.ctrlState, balanceMeasureOnly);
+            }
+            catch (Exception e)
+            {
+                Debug.LogError("MechJeb module MechJebModuleRCSBalancer threw an exception in OnLateUpdate: " + e);
+            }
+        }
+
         public override void Drive(FlightCtrlState s)
         {
-            if (smartTranslation)
+            _stepsSinceDrive = 0;
+
+            if (smartTranslationRotation)
+            {
+                CommandBalancer.Step(Vessel);
+            }
+            else if (smartTranslation)
             {
                 AdjustRCSThrottles(s);
             }

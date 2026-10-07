@@ -99,6 +99,8 @@
         <Compile Include="Primitives\Scale.cs"/>
         <Compile Include="Primitives\V3.cs"/>
         <Compile Include="Primitives\Vn.cs"/>
+        <Compile Include="RCS\RCSBalanceSolver.cs"/>
+        <Compile Include="RCS\RCSNozzleModel.cs"/>
         <Compile Include="Properties\AssemblyInfo.cs"/>
         <Compile Include="PVG\Ascent.cs"/>
         <Compile Include="PVG\AscentBuilder.cs"/>

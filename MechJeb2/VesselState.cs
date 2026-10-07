@@ -782,7 +782,7 @@ namespace MuMech
                 return;
 
             MechJebModuleRCSBalancer rcsbal = vessel.GetMasterMechJeb().Rcsbal;
-            if (rcsbal.Enabled)
+            if (rcsbal.UsesTranslationSolver)
             {
                 Vector3d rot = Vector3d.zero;
                 for (int i = 0; i < Vector6.Values.Length; i++)
@@ -869,7 +869,7 @@ namespace MuMech
                             Vector3d thrusterThrust = thrustDirection * power;
 
                             // This is a cheap hack to get rcsTorque with the RCS balancer active.
-                            if (!rcsbal.Enabled)
+                            if (!rcsbal.UsesTranslationSolver)
                             {
                                 rcsThrustAvailable.Add(Vector3.Scale(vessel.GetTransform().InverseTransformDirection(thrusterThrust),
                                     translationControl));
@@ -884,6 +884,10 @@ namespace MuMech
                     }
                 }
             }
+
+            // Smart translation & rotation throttles thrusters down: the attitude controller must not count on that torque.
+            if (rcsbal.Enabled && rcsbal.smartTranslationRotation)
+                rcsbal.CommandBalancer.ScaleTorqueAvailable(rcsTorqueAvailable);
         }
 
         [GeneralInfoItem("#MechJeb_RCSTranslation", InfoItem.Category.Vessel, showInEditor = true)] //RCS Translation

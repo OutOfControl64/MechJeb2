@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Reflection;
+using System.Reflection.Emit;
 using UnityEngine;
 
 namespace MechJebLibBindings
@@ -25,6 +26,28 @@ namespace MechJebLibBindings
             }
 
             return false;
+        }
+
+        /// <summary>
+        ///     Compiles a getter for an instance field (non-public too), for hot paths: unlike FieldInfo.GetValue it does
+        ///     not box value types.  Returns null (and logs) if there is no such field of type TField.
+        /// </summary>
+        public static Func<TObject, TField>? FieldGetter<TObject, TField>(string fieldName,
+            BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+        {
+            FieldInfo? field = typeof(TObject).GetField(fieldName, flags);
+            if (field == null || field.FieldType != typeof(TField))
+            {
+                Debug.Log($"[MechJeb] ReflectionUtils: could not find field {fieldName} of type {typeof(TField).Name} in {typeof(TObject).Name}");
+                return null;
+            }
+
+            var method = new DynamicMethod("Get" + fieldName, typeof(TField), new[] { typeof(TObject) }, typeof(TObject), true);
+            ILGenerator il = method.GetILGenerator();
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Ldfld, field);
+            il.Emit(OpCodes.Ret);
+            return (Func<TObject, TField>)method.CreateDelegate(typeof(Func<TObject, TField>));
         }
 
         public static FieldInfo? GetFieldByReflection(string assemblyString, string className, string fieldName,

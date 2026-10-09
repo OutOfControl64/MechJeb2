@@ -102,6 +102,10 @@ namespace MechJebLib.RCS
             double forceRef = 0, torqueRef = 0;
             for (int i = 0; i < n; i++)
             {
+                // Checked per component: V3.magnitude of a NaN vector is not NaN in every MechJebLib version.
+                if (!IsFinite(_force[i]) || !IsFinite(_torque[i]))
+                    return Fail();
+
                 forceRef = Max(forceRef, _force[i].magnitude);
                 torqueRef = Max(torqueRef, _torque[i].magnitude);
             }
@@ -302,5 +306,7 @@ namespace MechJebLib.RCS
         }
 
         private static bool IsFinite(double d) => !double.IsNaN(d) && !double.IsInfinity(d);
+
+        private static bool IsFinite(V3 v) => IsFinite(v.x) && IsFinite(v.y) && IsFinite(v.z);
     }
 }
